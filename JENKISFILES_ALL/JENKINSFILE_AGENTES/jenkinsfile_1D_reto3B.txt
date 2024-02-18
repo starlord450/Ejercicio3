@@ -1,0 +1,51 @@
+pipeline{
+    agent {label 'principal'}
+    stages{
+        stage('Get Code'){
+            agent {label 'principal'}
+            steps{
+                sh 'rm -rf todo-list-aws'
+                script{
+                    sh 'git clone -b master https://github.com/starlord450/todo-list-aws'
+                    sh 'whoami'
+                    echo WORKSPACE
+                    stash name: 'stashito', includes: '**/*'
+                }
+                
+            }
+        }
+        stage('Deploy'){
+            agent {label 'principal'}
+            steps{
+                script{
+                    unstash 'stashito'
+                    sh 'sam deploy --force-upload --no-confirm-changeset --no-fail-on-empty-changeset --stack-name todo-list-aws-production --config-env production --resolve-s3 --template todo-list-aws/template.yaml'
+                    sh 'whoami'
+                    echo WORKSPACE
+                }
+                
+            }
+        }
+        stage('Rest Test') {
+            agent {label 'esclavo2'}
+                steps {
+                    script {
+                        unstash 'stashito'
+                        def BASE_URL = sh(script: "aws cloudformation describe-stacks --stack-name todo-list-aws-production --query 'Stacks[0].Outputs[?OutputKey==`BaseUrlApi`].OutputValue' --output text", returnStdout: true).trim()
+                        echo "La URL de la API es: $BASE_URL"
+                        withEnv(["BASE_URL=${BASE_URL}"]) {
+                        sh "/home/ubuntu/.local/bin/pytest --junitxml=test/integration/result-rest.xml -k 'not deletetodo and not updatetodo and not addtodo' -s todo-list-aws/test/integration/todoApiTest.py" 
+                        sh 'whoami'
+                        echo WORKSPACE
+                            }
+                        }
+                    }
+                }
+            }    
+        post{
+            always { 
+                echo 'Clean env: delete dir'
+                cleanWs()
+            }
+        }
+    }

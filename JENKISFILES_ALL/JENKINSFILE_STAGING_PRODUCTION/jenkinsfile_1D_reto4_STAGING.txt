@@ -1,0 +1,14 @@
+pipeline {
+    agent any
+    stages {
+        stage('Get Code') {
+            steps {
+                script {
+                    sh 'rm -rf todo-list-aws'
+                    sh 'git clone https://github.com/starlord450/todo-list-aws.git'
+                    sh 'wget https://github.com/starlord450/todo-list-aws-config/blob/staging/samconfig.toml'
+                }
+            }
+        }
+    }
+}

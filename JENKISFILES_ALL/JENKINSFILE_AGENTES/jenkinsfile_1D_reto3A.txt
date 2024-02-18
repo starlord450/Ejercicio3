@@ -1,0 +1,97 @@
+pipeline{
+    agent {label 'principal'}
+    //agent none
+    stages{
+        stage('Get Code'){
+            agent {label 'principal'}
+            steps{
+                sh 'rm -rf todo-list-aws'
+                script{
+                    
+                    sh 'git clone -b develop https://github.com/starlord450/todo-list-aws'
+                    sh 'whoami'
+                    echo WORKSPACE
+                    stash name: 'stashito', includes: '**/*'
+                }
+                
+            }
+        }
+        stage('Static Test'){
+            agent {label 'esclavo1'}
+            steps{
+                script{
+                unstash 'stashito'    
+                dir('src') {
+                    //flake8
+                    sh '/home/ubuntu/.local/bin/flake8 --output-file=informe_flake8.txt .' 
+                    recordIssues tools: [flake8(name: 'Flake8', pattern: 'informe_flake8.txt')], qualityGates: [[threshold: 8, type: 'TOTAL', unstable: true], [threshold: 10, type: 'TOTAL', unstable: false]]
+                    //bandit
+                    sh '/home/ubuntu/.local/bin/bandit -r . -f json -o informe_bandit.json'
+                    recordIssues tools: [pyLint(name: 'Bandit', pattern: 'informe_bandit.txt')], qualityGates: [[threshold: 2, type: 'TOTAL', unstable: true], [threshold: 4, type: 'TOTAL', unstable: false]]
+                    sh 'whoami'
+                    echo WORKSPACE
+                    
+                    }
+                }
+            }
+        }
+        
+        stage('Deploy'){
+            agent {label 'principal'}
+            steps{
+                script{
+                    unstash 'stashito'
+                    sh 'sam deploy --force-upload --no-confirm-changeset --no-fail-on-empty-changeset --stack-name todo-list-aws-staging --config-env staging --resolve-s3 --template todo-list-aws/template.yaml'
+                    //sh 'sam deploy --force-upload --no-confirm-changeset --no-fail-on-empty-changeset --stack-name todo-list-aws --config-env staging --resolve-s3'
+                    sh 'whoami'
+                    echo WORKSPACE
+
+                }
+                
+            }
+        }
+        stage('Rest Test') {
+            agent {label 'esclavo2'}
+                steps {
+                script {
+                    unstash 'stashito'
+                    def BASE_URL = sh(script: "aws cloudformation describe-stacks --stack-name todo-list-aws-staging --query 'Stacks[0].Outputs[?OutputKey==`BaseUrlApi`].OutputValue' --output text", returnStdout: true).trim()
+                    echo "La URL de la API es: $BASE_URL"
+                    withEnv(["BASE_URL=${BASE_URL}"]) {
+                    sh "/home/ubuntu/.local/bin/pytest --junitxml=test/integration/result-rest.xml todo-list-aws/test/integration/todoApiTest.py || exit 1"
+                    sh 'whoami'
+                    echo WORKSPACE
+
+                    }
+                }
+            }
+        }
+        stage('Promote') {
+            agent {label 'principal'}
+                steps {
+                    script{
+                        unstash 'stashito'
+                        dir('todo-list-aws'){
+                            withCredentials([gitUsernamePassword(credentialsId: 'credenciales_github', usernameVariable: 'GIT_USERNAME', passwordVariable: 'GIT_PASSWORD')]) {
+                                sh '''
+                                git push --set-upstream origin develop
+                                git checkout master
+                                git merge develop
+                                git push
+                                '''
+                                }
+                            }
+                        sh 'whoami'
+                        echo WORKSPACE
+
+                        }    
+                    }
+                }
+            }    
+        post{
+            always { 
+                echo 'Clean env: delete dir'
+                cleanWs()
+            }
+        }
+}
